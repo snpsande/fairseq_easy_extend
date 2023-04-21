@@ -16,9 +16,45 @@ class RLCriterion(FairseqCriterion):
         super().__init__(task)
         self.metric = sentence_level_metric
 
-    def _compute_loss(
-        self, outputs, targets, masks=None, label_smoothing=0.0, name="loss", factor=1.0
-    ):
+    def forward(self, model, sample, reduce=True):
+        """Compute the loss for the given sample.
+        Returns a tuple with three elements:
+        1) the loss
+        2) the sample size, which is used as the denominator for the gradient
+        3) logging outputs to display while training
+        """
+        nsentences, ntokens = sample["nsentences"], sample["ntokens"]
+
+        # B x T
+        src_tokens, src_lengths = (
+            sample["net_input"]["src_tokens"],
+            sample["net_input"]["src_lengths"],
+        )
+        tgt_tokens, prev_output_tokens = sample["target"], sample["prev_target"]
+
+        outputs = model(src_tokens, src_lengths, prev_output_tokens, tgt_tokens)
+        #get loss only on tokens, not on lengths
+        outs = outputs["word_ins"].get("out", None)
+        masks = outputs["word_ins"].get("mask", None)
+
+        loss = self._compute_loss(outs, tgt_tokens, masks)
+
+        # NOTE:
+        # we don't need to use sample_size as denominator for the gradient
+        # here sample_size is just used for logging
+        sample_size = 1
+        logging_output = {
+            "loss": loss.detach(),
+            "nll_loss": loss.detach(),
+            "ntokens": ntokens,
+            "nsentences": nsentences,
+            "sample_size": sample_size,
+        }
+
+        return loss, sample_size, logging_output
+
+
+    def _compute_loss(self, outputs, targets, masks=None):
         """
         outputs: batch x len x d_model
         targets: batch x len
@@ -39,7 +75,7 @@ class RLCriterion(FairseqCriterion):
             #R(*) = eval_metric(sampled_sentence_string, target_sentence)
             #R(*) is a number, BLEU, сhrf, etc.
 
-        #loss = -log_prob(outputs)*R()
+        #loss = -log_prob(sample_outputs)*R()
         #loss = loss.mean()
 
         return loss
